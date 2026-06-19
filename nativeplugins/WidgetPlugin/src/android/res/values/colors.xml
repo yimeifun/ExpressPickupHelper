@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 取件码主色 -->
+    <color name="widget_code">#1A2A4A</color>
+    <!-- 主要文字色 -->
+    <color name="widget_text_primary">#222222</color>
+    <!-- 次要文字色 -->
+    <color name="widget_text_secondary">#888888</color>
+    <!-- 分割线 -->
+    <color name="widget_divider">#1F000000</color>
+    <!-- 毛玻璃背景主色 -->
+    <color name="widget_bg">#F8F8F8</color>
+</resources>

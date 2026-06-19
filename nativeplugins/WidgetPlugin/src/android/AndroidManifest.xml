@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WidgetPlugin - AndroidManifest 合并片段
+  说明：在 uni-app 打包时，HBuilderX 会将此文件与主 AndroidManifest 合并，
+       用于注册 AppWidgetProvider 与 RemoteViewsService。
+
+  注意：包名必须与您最终打包生成的应用包名一致，
+        请将 "com.express.pickup" 替换为您的实际包名。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.express.pickup">
+
+    <application>
+
+        <!-- 桌面小组件 provider -->
+        <receiver
+            android:name="com.express.pickup.widget.WidgetProvider"
+            android:exported="true"
+            android:label="取件码助手">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.express.pickup.ACTION_UPDATE_WIDGET" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- 列表渲染服务（RemoteViewsService） -->
+        <service
+            android:name="com.express.pickup.widget.WidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <!-- 可选：后台刷新服务 -->
+        <service
+            android:name="com.express.pickup.widget.WidgetUpdateService"
+            android:exported="false" />
+
+    </application>
+</manifest>

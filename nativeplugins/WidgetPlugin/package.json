@@ -1,0 +1,30 @@
+{
+  "name": "WidgetPlugin",
+  "id": "WidgetPlugin-1.0.0",
+  "version": "1.0.0",
+  "description": "取件码助手 - Android 桌面小组件原生插件",
+  "_dp_type": "nativeplugin",
+  "_dp_nativeplugin": {
+    "androidPlugins": [
+      {
+        "name": "WidgetPlugin",
+        "type": "native",
+        "info": {
+          "description": "提供桌面小组件（4x3）展示待取件快递列表的原生能力",
+          "androidPermissions": [
+            "android.permission.RECEIVE_BOOT_COMPLETED"
+          ]
+        }
+      }
+    ]
+  },
+  "author": {
+    "name": "express-pickup"
+  },
+  "engines": [
+    {
+      "name": "HBuilderX",
+      "version": ">=3.0.0"
+    }
+  ]
+}

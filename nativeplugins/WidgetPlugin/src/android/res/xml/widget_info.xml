@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AppWidget Provider 信息
+  minResizeWidth / minResizeHeight 定义最小缩放尺寸
+  previewImage 为桌面添加小组件时的预览图标（建议 200x200 dp）
+  resizeMode 允许水平+垂直方向缩放
+  widgetCategory 支持主屏与锁屏
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="250dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="3"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_layout"
+    android:previewLayout="@layout/widget_layout"
+    android:previewImage="@drawable/widget_preview"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen|keyguard"
+    android:description="@string/widget_description"
+    android:autoAdvanceViewId="@id/widget_list" />

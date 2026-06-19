@@ -1,0 +1,50 @@
+/**
+ * uni-app 内置全局样式变量（SCSS）
+ * 全局可直接使用，无需手动 import
+ */
+
+/* 主色 / 强调色 */
+$primary-color: #1A2A4A;      // 主色 - 深蓝色（取件码显示色）
+$primary-light: #3A5A8A;
+$accent-color: #4CD964;       // 成功色（确认按钮）
+$warning-color: #F0AD4E;
+$danger-color: #DD524D;
+
+/* 背景颜色 */
+$bg-color: #F8F8F8;
+$card-bg: #FFFFFF;
+
+/* 文字颜色 */
+$text-primary: #1A2A4A;
+$text-secondary: #666666;
+$text-placeholder: #999999;
+
+/* 边框 & 阴影 */
+$border-color: #EEEEEE;
+$card-shadow: 0 4rpx 16rpx rgba(26, 42, 74, 0.08);
+
+/* 尺寸 */
+$card-radius: 16rpx;
+
+/* uni-ui 原有变量（保留以兼容） */
+$uni-color-primary: #1A2A4A;
+$uni-color-success: #4cd964;
+$uni-color-warning: #f0ad4e;
+$uni-color-error: #dd524d;
+$uni-text-color: #333;
+$uni-text-color-inverse: #fff;
+$uni-text-color-grey: #999;
+$uni-text-color-placeholder: #808080;
+$uni-text-color-disable: #c0c0c0;
+$uni-bg-color: #ffffff;
+$uni-bg-color-grey: #f8f8f8;
+$uni-bg-color-hover: #f1f1f1;
+$uni-bg-color-mask: rgba(0, 0, 0, 0.4);
+$uni-border-color: #c8c7cc;
+$uni-font-size-sm: 12px;
+$uni-font-size-base: 14px;
+$uni-font-size-lg: 16px;
+$uni-border-radius-sm: 2px;
+$uni-border-radius-base: 3px;
+$uni-border-radius-lg: 6px;
+$uni-border-radius-circle: 50%;
