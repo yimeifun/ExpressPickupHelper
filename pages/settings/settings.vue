@@ -186,15 +186,15 @@ function showChangelog() {
 }
 
 /**
- * 获取最新版（跳转 https://github.com/yimeifun/PickupCodeHelper）
+ * 获取最新版（跳转 https://github.com/yimeifun/ExpressPickupHelper）
  */
 function openUpdateLink() {
   // #ifdef APP-PLUS
-  plus.runtime.openURL('https://github.com/yimeifun/PickupCodeHelper')
+  plus.runtime.openURL('https://github.com/yimeifun/ExpressPickupHelper')
   // #endif
   // #ifndef APP-PLUS
   uni.setClipboardData({
-    data: 'https://github.com/yimeifun/PickupCodeHelper',
+    data: 'https://github.com/yimeifun/ExpressPickupHelper',
     success: () => {
       uni.showToast({ title: '下载链接已复制，请在浏览器打开', icon: 'none' })
     }
@@ -208,7 +208,7 @@ function openUpdateLink() {
  */
 function onShare() {
   const shareText =
-    '「取件码助手」自动识别快递取件码，驿站/快递智能区分，支持批量确认、超时提醒和截图识别。好用又省心！\n\n下载：https://github.com/yimeifun/PickupCodeHelper'
+    '「取件码助手」自动识别快递取件码，驿站/快递智能区分，支持批量确认、超时提醒和截图识别。好用又省心！\n\n下载：https://github.com/yimeifun/ExpressPickupHelper'
 
   // 第一步：复制文本到剪贴板
   uni.setClipboardData({
