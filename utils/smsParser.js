@@ -12,6 +12,7 @@ import { sendNotification, getNotificationPrefs } from '@/utils/widgetBridge'
  */
 const COMPANY_KEYWORDS = [
   // 驿站类（用户指定）
+  { name: '心甜智能柜', keys: ['心甜智能柜', '新田智能柜', '心甜', '新田'], emoji: '' },
   { name: '菜鸟驿站', keys: ['菜鸟驿站取件', '菜鸟驿站', '菜鸟'], emoji: '' },
   { name: '妈妈驿站', keys: ['妈妈驿站', '妈妈驿'], emoji: '' },
   { name: '圆通速递', keys: ['圆通快递', '圆通速递', '圆通'], emoji: '' },
@@ -59,6 +60,8 @@ const COMPANY_KEYWORDS = [
  * 当与快递公司关键词同时出现时，格式为「驿站（快递公司）」
  */
 const STATION_KEYWORDS = [
+  // 心甜智能柜（邮政旗下智能快递柜品牌，优先识别为驿站）
+  { name: '心甜智能柜', keys: ['心甜智能柜', '新田智能柜', '心甜', '新田'], emoji: '' },
   { name: '菜鸟驿站', keys: ['菜鸟驿站', '菜鸟驿'], emoji: '' },
   { name: '妈妈驿站', keys: ['妈妈驿站', '妈妈驿'], emoji: '' },
   { name: '兔喜生活', keys: ['兔喜生活', '兔喜'], emoji: '' },
@@ -267,20 +270,25 @@ const SMS_CONTEXT_KEYWORDS = [
 ]
 
 /**
- * 地址提取正则（只提取完整地址，避免与取件码混淆）
- * 优先级从高到低排列（具体格式优先，通用格式兜底）
+ * 地址提取正则（按优先级从高到低排列）
+ * 优化策略：
+ *   - 前 3 项匹配「明确标注地址」的格式（准确率最高）
+ *   - 中间项匹配「驿站式指令」（在xxx / 已到xxx / 已存放xxx 等）
+ *   - 后段匹配「导航式指令」（到xxx取 / 前往xxx / 请到xxx）
+ *   - 最后是地理关键词兜底（xxx路 / xxx街 / xxx号 / xxx小区 等）
  */
 const ADDRESS_PATTERNS = [
   // ============================================================
-  // 高优先级：明确标注「取件地址」/ 「取件位置」
+  // 最高优先级：明确标注地址
   // ============================================================
   /取件地址[：:\s]([^\n，。,\.；;]{3,80})/,
   /取件位置[：:\s]([^\n，。,\.；;]{3,80})/,
   /取件点[：:\s]([^\n，。,\.；;]{3,80})/,
   /收件地址[：:\s]([^\n，。,\.；;]{3,80})/,
+  /取件地点[：:\s]([^\n，。,\.；;]{3,80})/,
 
   // ============================================================
-  // 中优先级：驿站式格式「在xxx」「存放xxx」「已到xxx」
+  // 高优先级：驿站式格式「在xxx」「存放xxx」「已到xxx」「已暂存xxx」
   // ============================================================
   // 【驿站名】已到xxx，请凭xxx
   /已到(.+?)[\s，,]请凭/,
@@ -296,32 +304,59 @@ const ADDRESS_PATTERNS = [
   // 暂存xxx，取件码
   /暂存(.+?)[\s，,]取件码/,
   /暂存(.+?)[\s，,]/,
-  // 在xxx取件（码）
+  // 在xxx取件 / 在xxx取货 / 在xxx取包
   /在(.+?)[\s，,]取件/,
   /在(.+?)[\s，,]取货/,
-  // 放置在xxx
+  /在(.+?)[\s，,]取包/,
+  /在(.+?)[\s，,]取/,
   /放置在(.+?)[\s，,]/,
+  // 包裹已放在xxx / 您的包裹已存放在xxx（智能柜短信常见格式）
+  /包裹已放在(.+?)[\s，,]/,
+  /包裹已存放于(.+?)[\s，,]/,
+  /包裹已到(.+?)[\s，,]/,
+  /您的包裹已到(.+?)[\s，,]/,
 
   // ============================================================
-  // 通用格式：「到xxx」「前往xxx」「请到xxx」「由xxx保管」
+  // 中优先级：导航式指令「到xxx取」「前往xxx」「请到xxx」
+  // 特别处理「到xxx取您的包裹」「到xxx领取」等智能柜常见格式
   // ============================================================
-  // 请到xxx取件（最常见格式之一）
+  // 「请到xxx取件」（最常见格式）
   /请到(.+?)[\s，,]取件/,
+  /请到(.+?)[\s，,]领取/,
+  /请到(.+?)[\s，,]取包/,
+  /请到(.+?)[\s，,]取/,
   /请到(.+?)[\s，,]/,
-  // 前往xxx（驿站短信常见）
+  // 「前往xxx」
+  /前往(.+?)[\s，,]取件/,
   /前往(.+?)[\s，,]/,
-  // 凭xxx到xxx取
+  // 「到xxx取件」「到xxx取您的包裹」「到xxx领取」
+  /到(.+?)[\s，,]取您的包裹/,
   /到(.+?)[\s，,]取件/,
+  /到(.+?)[\s，,]领取/,
+  /到(.+?)[\s，,]取包/,
   /到(.+?)[\s，,]取/,
-  // 到xxx（丰巢柜等常见）
-  /到(.+?)[\s，,]/,
-  // 由xxx保管/由xxx代收
+  // 「到xxx」后面紧跟驿站/柜名时（无标点分隔）
+  /到([^\n，。,\.；;]{3,40}?(?:驿站|快递柜|智能柜|柜|代收点|菜鸟|妈妈驿|丰巢|兔喜|快宝|门店|门市))/,
+
+  // ============================================================
+  // 低优先级：由xxx保管 / 由xxx代收
+  // ============================================================
   /由(.+?)保管/,
   /由(.+?)代收/,
   /由(.+?)暂存/,
 
   // ============================================================
-  // 兜底：「地址：xxx」格式（最通用）
+  // 地理关键词兜底（当所有指令格式都失败时使用）
+  // 识别形如「xx路xx号」「xx街xx号」「xx小区」「xx村组」「xx栋xx单元」
+  // ============================================================
+  /([^\n，。,\.；;\s]{2,40}?(?:(?:路|街|巷|弄|道|大道|大街|胡同|小区|广场|公寓|大厦|大厦|商贸城|农贸市场|花园|苑|园|村|组|乡|镇|市|区|号楼|栋|幢|单元|室|驿站|快递柜|智能柜|柜|代收点|门店|门市)\S{0,20})?[^\n，。,\.；;]{0,15}?(?:号|房|\d+号|\d+栋|\d+幢|\d+单元|\d+室))/,
+  // 「xx街xx号」「xx小区xx店」模式
+  /([^\n，。,\.；;\s]{2,40}?[路街道巷弄大道大街][^\n，。,\.；;]{0,20}?号)/,
+  // 「xx快递柜」「xx驿站」「xx代收点」（单独出现时也算地址）
+  /([^\n，。,\.；;]{2,40}?(?:快递柜|智能柜|驿站|代收点|菜鸟驿站|妈妈驿站|丰巢|兔喜|快宝|欢猫|邻里|熊猫|小兵|小象|多多|申通喵|邮政|速递易|云柜|富友|近邻宝|喵柜|门店|门市))/,
+
+  // ============================================================
+  // 最后兜底：「地址：xxx」格式
   // ============================================================
   /地址[：:\s]([^\n，。,\.；;]{3,80})/,
 
@@ -398,11 +433,14 @@ export function parsePickupCode(body) {
     return { company: '其他快递', code: null, address: '', emoji: '' }
   }
 
-  // 0. 预处理：统一全角符号，减少因 OCR 识别差异导致的匹配失败
+  // 0. 预处理：统一全角符号，清理中文引号（「」『』"''`）等
+  //    例：凭取件码「62752647」 → 凭取件码62752647
   const normalized = body
     .replace(/：/g, ':')
     .replace(/【/g, '【')
     .replace(/】/g, '】')
+    .replace(/[「」『"'`]/g, '')  // 清理中文引号和英文引号
+    .replace(/[ \t]{2,}/g, ' ')   // 多个空白合并为一个
 
   // 1. 匹配取件码（按优先级）
   let code = null
@@ -470,27 +508,159 @@ export function parsePickupCode(body) {
   }
 
   // 4. 提取地址（后文优先，前文兜底）
-  // 优先在后文（取件码之后的文字）查找，因为地址通常在码之后
+  // 策略：
+  //   A) 先尝试明确指令格式（到xxx取 / 已到xxx / 前往xxx 等）
+  //   B) 若失败，做智能提取：从最后一个「到/前往/请到/在」开始，
+  //      到「取/取件/取货/领取/！/。」为止的内容作为地址
+  //   C) 再回退到地理关键词兜底（xx路xx号 / xx小区 / xx驿站 等）
+  //   D) 最后在前文（beforeCode）中再找一遍
   let address = ''
-  for (const reg of ADDRESS_PATTERNS) {
-    const m = afterCode.match(reg)
-    if (m && m[1]) {
-      address = _cleanAddress(m[1])
-      break
+
+  // 4-A) 先按顺序尝试明确指令格式（ADDRESS_PATTERNS 中前半部分）
+  //      但去掉对 [\s，,] 分隔符的强依赖，改用更宽的「到…取」模式
+  if (afterCode) {
+    // 智能模式1：查找最后一个「到/前往/请到/在」+「取件/取您的包裹/领取/取/」
+    // 例如：「到白鹤滩秋兰街43号你的邮政包裹到白鹤滩二号街邮政快递柜门市取您的包裹」
+    const smartAddress1 = _extractSmartAddress(afterCode)
+    if (smartAddress1) {
+      address = smartAddress1
+    }
+
+    // 4-B) 智能模式未命中 → 按常规正则逐个尝试
+    if (!address) {
+      for (const reg of ADDRESS_PATTERNS) {
+        const m = afterCode.match(reg)
+        if (m && m[1]) {
+          address = _cleanAddress(m[1])
+          if (address) break
+        }
+      }
     }
   }
-  // 后文无结果则尝试在前文找
+
+  // 4-C) 后文无结果 → 在前文或全文中再找一遍（地理关键词兜底）
   if (!address) {
     for (const reg of ADDRESS_PATTERNS) {
       const m = beforeCode.match(reg)
       if (m && m[1]) {
         address = _cleanAddress(m[1])
-        break
+        if (address) break
+      }
+    }
+  }
+
+  // 4-D) 仍然失败 → 在整段 normalized 中找地理关键词兜底
+  if (!address) {
+    for (const reg of ADDRESS_PATTERNS) {
+      const m = normalized.match(reg)
+      if (m && m[1]) {
+        address = _cleanAddress(m[1])
+        if (address) break
       }
     }
   }
 
   return { company, code, address, emoji }
+}
+
+/**
+ * 智能地址提取：从 afterCode 中用「最后一个导航词→取件动作」的方式提取地址
+ * 解决中文连写无标点的场景，例如：
+ *   「到白鹤滩秋兰街43号你的邮政包裹到白鹤滩二号街邮政快递柜门市取您的包裹！」
+ *   应提取为「白鹤滩二号街邮政快递柜门市」
+ *
+ * 策略：
+ *   1) 找到所有导航词（到/前往/请到/在/到达）的位置
+ *   2) 对每个位置，截取从导航词后到「取件/取您的包裹/领取/！/。/」为止的内容
+ *   3) 从这些候选中选含地理关键词（街/路/号/小区/门市/驿站/柜 等）且长度最合适的一个
+ *
+ * @param {string} text - 取件码之后的文本
+ * @returns {string} - 提取到的地址（清洗后），空字符串表示未找到
+ */
+function _extractSmartAddress(text) {
+  if (!text || text.length < 3) return ''
+
+  // 导航起始词（用于定位地址可能的起点）
+  const NAV_START = ['前往', '请到', '到达', '抵达', '到']
+  // 地址结束词（用于定位地址的终点，出现这些词说明已离开地址描述）
+  const ADDRESS_END = ['取件', '取您', '取货', '取包', '领取', '来取', '取', '！', '!', '。', '.', '，', ',', '；']
+  // 地理关键词（含这些词才认为是真的地址，避免误提取整段噪声）
+  const GEO_KW = ['街', '路', '巷', '弄', '号', '村', '镇', '区', '市', '小区', '广场', '大厦', '公寓', '花园', '号楼', '栋', '幢', '单元', '室', '驿站', '快递柜', '智能柜', '柜', '代收点', '菜鸟', '妈妈驿', '丰巢', '兔喜', '快宝', '欢猫', '邻里', '熊猫', '小兵', '小象', '多多', '申通喵', '邮政', '速递易', '云柜', '富友', '近邻宝', '喵柜', '门店', '门市', '胡同', '大街', '大道', '苑', '园', '商贸城', '农贸市场', '组', '乡']
+
+  // 步骤 1) 找出所有导航词的起始位置（从后往前找，优先靠后的「到」）
+  const candidates = []
+  for (const navWord of NAV_START) {
+    let searchFrom = 0
+    while (true) {
+      const idx = text.indexOf(navWord, searchFrom)
+      if (idx < 0) break
+      searchFrom = idx + navWord.length
+
+      // 步骤 2) 以导航词结尾为起点，找最近的地址结束词
+      const start = idx + navWord.length
+      // 找最短结束位置
+      let end = -1
+      for (const endWord of ADDRESS_END) {
+        const e = text.indexOf(endWord, start)
+        if (e > 0 && (end < 0 || e < end)) {
+          end = e
+        }
+      }
+      if (end < 0 || end <= start) {
+        // 没找到明确结束词 → 使用剩余文本（最长 60 字符）
+        end = Math.min(start + 60, text.length)
+      }
+
+      let raw = text.substring(start, end).trim()
+      // 去掉首尾噪声
+      raw = raw.replace(/^[\s，,。.！!？?；;:：、]+/, '')
+      raw = raw.replace(/[\s，,。.！!？?；;:：、]+$/, '')
+
+      if (raw.length < 3 || raw.length > 60) continue
+
+      // 步骤 3) 必须包含地理关键词（防止误取整段无关文字）
+      const hasGeoKw = GEO_KW.some(kw => raw.includes(kw))
+      if (!hasGeoKw) continue
+
+      // 步骤 4) 避免提取出太长或包含整句指令的内容
+      // 去除「您的包裹」「你的包裹」等干扰词
+      raw = raw.replace(/您的[包裹快递件码]{1,6}/g, '').trim()
+      raw = raw.replace(/你的[包裹快递件码]{1,6}/g, '').trim()
+
+      candidates.push({
+        raw,
+        geoScore: GEO_KW.reduce((sum, kw) => sum + (raw.includes(kw) ? 1 : 0), 0), // 地理关键词越多越可信
+        pos: idx,
+        length: raw.length
+      })
+    }
+  }
+
+  if (candidates.length === 0) return ''
+
+  // 步骤 5) 选择最佳候选：地理关键词最多 + 位置靠后（更接近取件动作）
+  // 排序优先级：地理关键词得分 → 位置靠后（后出现的「到」更可能是真实取件点）→ 长度适中
+  candidates.sort((a, b) => {
+    if (b.geoScore !== a.geoScore) return b.geoScore - a.geoScore
+    if (b.pos !== a.pos) return b.pos - a.pos // 位置靠后优先
+    return a.length - b.length
+  })
+
+  // 对最终地址做二次清洗：
+  //   - 取最后一个「到/在/前往」后面的部分（避免包含导航中间信息）
+  let finalAddress = candidates[0].raw
+  // 如果内部还包含「到」「在」等导航词，取最后一段
+  const lastIdxOfNav = Math.max(
+    finalAddress.lastIndexOf('到'),
+    finalAddress.lastIndexOf('前往'),
+    finalAddress.lastIndexOf('请到'),
+    finalAddress.lastIndexOf('在')
+  )
+  if (lastIdxOfNav > 0 && lastIdxOfNav < finalAddress.length - 2) {
+    finalAddress = finalAddress.substring(lastIdxOfNav + 1).trim()
+  }
+
+  return _cleanAddress(finalAddress)
 }
 
 /**

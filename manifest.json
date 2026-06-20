@@ -69,9 +69,9 @@
             "splashscreen" : {
                 "androidStyle" : "default",
                 "android" : {
-                    "hdpi" : "D:/Downloads/splash-480x762.png",
-                    "xhdpi" : "D:/Downloads/splash-720x1242.png",
-                    "xxhdpi" : "D:/Downloads/splash-1080x1882.png"
+                    "hdpi" : "static/start_480-762.png",
+                    "xhdpi" : "static/start_720-1242.png",
+                    "xxhdpi" : "static/start_1080-1882.png"
                 }
             }
         }

@@ -18,8 +18,8 @@
     >
       <text class="summary-icon">{{ report.allOk ? '✅' : '⚠️' }}</text>
       <view class="summary-text">
-        <text class="summary-title">{{ report.allOk ? '一切正常' : '存在异常' }}</text>
-        <text class="summary-desc">{{ report.allOk ? '核心功能均运行正常' : '请根据下方提示处理异常项' }}</text>
+        <text class="summary-title">{{ report.allOk ? '基本正常\n「请自行检查通知类短信权限是否开启」' : '存在异常' }}</text>
+        <text class="summary-desc">{{ report.allOk ? '核心功能运行正常' : '请根据下方提示处理异常项' }}</text>
         <text class="summary-time">检测时间：{{ lastCheckTime }}</text>
       </view>
     </view>
