@@ -3,6 +3,15 @@
     <!-- 顶部导航栏 -->
     <view class="nav-bar">
       <SearchBar v-model="keyword" class="nav-search" placeholder="搜索快递/取件码/地址" />
+      <!-- 消息中心入口 -->
+      <view class="nav-btn" @click="goMessages">
+        <view class="nav-icon-box">
+          <text class="nav-icon-char">🔔</text>
+          <view v-if="unreadCount > 0" class="nav-badge">
+            <text>{{ unreadCount > 99 ? '99+' : unreadCount }}</text>
+          </view>
+        </view>
+      </view>
       <view class="nav-btn" @click="toggleBatch">
         <view class="nav-icon-box" :class="{ active: isBatch }">
           <text class="nav-icon-char">{{ isBatch ? '✕' : '☰' }}</text>
@@ -199,6 +208,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { useExpressStore } from '@/stores/express'
 import { checkAndLoadSms, parsePickupCode } from '@/utils/smsParser'
+import { getUnreadCount, markAllRead } from '@/utils/widgetBridge'
 import SearchBar from '@/components/SearchBar.vue'
 import ExpressCard from '@/components/ExpressCard.vue'
 
@@ -211,6 +221,7 @@ const formMode = ref('auto')
 const form = ref({ company: '', code: '', address: '', rawText: '' })
 const dailySaying = ref('')
 const hasShownPermissionTip = ref(false)
+const unreadCount = ref(0)
 
 /**
  * 监听 rawText 变化，自动解析快递信息
@@ -379,6 +390,36 @@ function goSettings() {
 }
 
 /**
+ * 打开消息中心
+ */
+function goMessages() {
+  uni.showModal({
+    title: '📨 消息中心',
+    content: '这里显示历史提醒和快递通知（最近 100 条）。\n\n✅ 新快递到达提醒会自动保存到此处，方便回顾。',
+    confirmText: '我知道了',
+    showCancel: false
+  })
+  // 进入消息中心即标记为已读
+  try {
+    markAllRead()
+    unreadCount.value = 0
+  } catch (e) {
+    console.warn('[index] 标记已读异常：', e)
+  }
+}
+
+/**
+ * 刷新未读计数
+ */
+function refreshUnread() {
+  try {
+    unreadCount.value = getUnreadCount()
+  } catch (e) {
+    unreadCount.value = 0
+  }
+}
+
+/**
  * OCR 识别截图
  */
 function goOcr() {
@@ -419,7 +460,7 @@ async function retryPermission() {
 function showPermissionTip() {
   uni.showModal({
     title: '权限提醒',
-    content: '为保证软件正常获取取件码，请务必确保授予以下权限：\n1. 读取短信\n2. 通知类短信「权限管理-其他权限」\n3. 接收短信',
+    content: '为保证软件正常获取取件码，请务必确保授予以下权限：\n1. 读取短信 \n3. 接收短信 \n2. 通知类短信「权限管理-其他权限」',
     confirmText: '我知道了',
     cancelText: '不再提醒',
     success: (res) => {
@@ -489,6 +530,9 @@ onMounted(async () => {
   // 启动时检查一次超时
   store.checkTimeout(false)
 
+  // 刷新未读消息
+  refreshUnread()
+
   // 启动时展示权限提醒（仅展示一次，且未选择"不再提醒"时才弹出）
   setTimeout(() => {
     let skipTip = false
@@ -505,12 +549,13 @@ onMounted(async () => {
 })
 
 /**
- * 页面每次显示时：检查一次超时（轻量级）
+ * 页面每次显示时：检查一次超时（轻量级）+ 刷新未读计数
  */
 onShow(() => {
   if (store.list.length > 0) {
     store.checkTimeout(false)
   }
+  refreshUnread()
 })
 
 /**
@@ -584,6 +629,33 @@ onPullDownRefresh(onPullDownRefreshHandler)
   font-weight: 600;
   color: #3A4A6A;
   line-height: 1;
+}
+
+/* 消息徽章 */
+.nav-badge {
+  position: absolute;
+  top: -6rpx;
+  right: -6rpx;
+  min-width: 28rpx;
+  height: 28rpx;
+  padding: 0 6rpx;
+  background: #EF4444;
+  border-radius: 14rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2rpx solid #FFFFFF;
+}
+.nav-badge text {
+  font-size: 18rpx;
+  color: #FFFFFF;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* 让图标容器可以放置绝对定位徽章 */
+.nav-icon-box {
+  position: relative;
 }
 
 /* 批量模式顶部操作栏 */

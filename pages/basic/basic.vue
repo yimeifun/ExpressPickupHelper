@@ -6,6 +6,86 @@
       <text class="header-sub">管理应用基础功能</text>
     </view>
 
+    <!-- 通知提醒设置 -->
+    <view class="section">
+      <view class="section-title">通知提醒</view>
+
+      <view class="setting-card">
+        <!-- 总开关 -->
+        <view class="switch-row">
+          <view class="switch-info">
+            <text class="switch-icon">🔔</text>
+            <text class="switch-name">启用通知</text>
+          </view>
+          <switch
+            :checked="notifyPrefs.enabled"
+            @change="(e) => updatePref('enabled', e.detail.value)"
+            color="#4A8DCC"
+          />
+        </view>
+
+        <!-- 系统通知 -->
+        <view class="switch-row">
+          <view class="switch-info">
+            <text class="switch-icon">📢</text>
+            <text class="switch-name">系统通知栏提醒</text>
+            <text class="switch-desc">新快递到达时在系统通知栏推送</text>
+          </view>
+          <switch
+            :checked="notifyPrefs.showSystemNotify"
+            :disabled="!notifyPrefs.enabled"
+            @change="(e) => updatePref('showSystemNotify', e.detail.value)"
+            color="#4A8DCC"
+          />
+        </view>
+
+        <!-- 应用内消息中心 -->
+        <view class="switch-row">
+          <view class="switch-info">
+            <text class="switch-icon">📨</text>
+            <text class="switch-name">应用内消息中心</text>
+            <text class="switch-desc">在应用内保存历史通知，便于查阅</text>
+          </view>
+          <switch
+            :checked="notifyPrefs.showAppNotify"
+            :disabled="!notifyPrefs.enabled"
+            @change="(e) => updatePref('showAppNotify', e.detail.value)"
+            color="#4A8DCC"
+          />
+        </view>
+
+        <!-- 声音 -->
+        <view class="switch-row">
+          <view class="switch-info">
+            <text class="switch-icon">🔊</text>
+            <text class="switch-name">提示声音</text>
+            <text class="switch-desc">推送通知时播放提示音</text>
+          </view>
+          <switch
+            :checked="notifyPrefs.sound"
+            :disabled="!notifyPrefs.enabled"
+            @change="(e) => updatePref('sound', e.detail.value)"
+            color="#4A8DCC"
+          />
+        </view>
+
+        <!-- 震动 -->
+        <view class="switch-row no-border">
+          <view class="switch-info">
+            <text class="switch-icon">📳</text>
+            <text class="switch-name">震动提示</text>
+            <text class="switch-desc">推送通知时伴随震动</text>
+          </view>
+          <switch
+            :checked="notifyPrefs.vibrate"
+            :disabled="!notifyPrefs.enabled"
+            @change="(e) => updatePref('vibrate', e.detail.value)"
+            color="#4A8DCC"
+          />
+        </view>
+      </view>
+    </view>
+
     <!-- 已取件自动清除 -->
     <view class="section">
       <view class="section-title">已取件自动清除</view>
@@ -25,7 +105,7 @@
           <switch
             :checked="autoClearEnabled"
             @change="onAutoClearSwitch"
-            color="#1A2A4A"
+            color="#4A8DCC"
           />
         </view>
 
@@ -116,14 +196,16 @@
       <text class="tip-text">• 自动清除仅在应用启动时执行一次</text>
       <text class="tip-text">• 清除的记录无法恢复，请根据需要选择合适的天数</text>
       <text class="tip-text">• 数据仅保存在本地，卸载应用将清除所有数据</text>
+      <text class="tip-text">• 系统通知需要在手机设置中授予通知权限</text>
     </view>
   </view>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useExpressStore } from '@/stores/express'
 import { storeToRefs } from 'pinia'
+import { getNotificationPrefs, setNotificationPrefs, sendNotification, clearNotifications } from '@/utils/widgetBridge'
 
 const store = useExpressStore()
 const { pendingList, pickedList } = storeToRefs(store)
@@ -137,11 +219,24 @@ const pickedCount = computed(() => pickedList.value.length)
 const autoClearEnabled = ref(false)
 const autoClearDays = ref(7)
 
+// 通知偏好
+const notifyPrefs = reactive({
+  enabled: true,
+  sound: true,
+  vibrate: true,
+  showAppNotify: true,
+  showSystemNotify: true
+})
+
 // 存储键名
 const STORAGE_KEY_AUTO_CLEAR = 'autoClearEnabled'
 const STORAGE_KEY_AUTO_CLEAR_DAYS = 'autoClearDays'
 
 onMounted(() => {
+  // 加载通知偏好
+  const savedPrefs = getNotificationPrefs()
+  Object.assign(notifyPrefs, savedPrefs)
+
   // 从本地存储读取设置
   const savedEnabled = uni.getStorageSync(STORAGE_KEY_AUTO_CLEAR)
   const savedDays = uni.getStorageSync(STORAGE_KEY_AUTO_CLEAR_DAYS)
@@ -158,6 +253,28 @@ onMounted(() => {
     performAutoClear()
   }
 })
+
+/**
+ * 更新单个通知偏好
+ */
+function updatePref(key, value) {
+  notifyPrefs[key] = value
+  setNotificationPrefs({ ...notifyPrefs })
+  uni.showToast({ title: '已更新设置', icon: 'none' })
+
+  // 如果启用通知，发一条测试通知（避免频繁触发，只在首次启用总开关时发送）
+  if (key === 'enabled' && value) {
+    try {
+      sendNotification({
+        title: '🔔 通知已启用',
+        content: '新快递到达时将自动提醒，请勿关闭通知权限',
+        type: 'system'
+      })
+    } catch (e) {
+      console.warn('[basic] 测试通知发送异常：', e)
+    }
+  }
+}
 
 /**
  * 切换自动清除开关
@@ -258,6 +375,7 @@ function onClearAll() {
     success: (res) => {
       if (res.confirm) {
         store.clearAll()
+        try { clearNotifications() } catch (err) { /* ignore */ }
         uni.showToast({ title: '已清空所有记录', icon: 'success' })
       }
     }
@@ -346,8 +464,41 @@ function onClearAll() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16rpx 0;
+  padding: 20rpx 0;
   border-bottom: 1rpx solid #E8E8E8;
+}
+
+.switch-row.no-border {
+  border-bottom: none;
+}
+
+.switch-info {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.switch-icon {
+  font-size: 34rpx;
+  margin-right: 16rpx;
+  flex-shrink: 0;
+}
+
+.switch-name {
+  font-size: 28rpx;
+  color: #1A2A4A;
+  font-weight: 500;
+}
+
+.switch-desc {
+  font-size: 24rpx;
+  color: #8A8A8A;
+  margin-left: 12rpx;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .switch-label {
@@ -383,7 +534,7 @@ function onClearAll() {
 }
 
 .day-option.active {
-  background: #1A2A4A;
+  background: #4A8DCC;
   color: #FFFFFF;
 }
 

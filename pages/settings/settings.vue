@@ -5,7 +5,7 @@
       <view class="section-title">基础设置</view>
       <view class="link-item" @click="goBasicSettings">
         <view class="link-icon-box icon-blue">
-          <text class="link-icon-text">📁</text>
+          <text class="link-icon-text">📂</text>
         </view>
         <text class="link-label">数据管理</text>
         <text class="link-arrow">›</text>
@@ -72,7 +72,7 @@
           <text class="link-icon-text">💬</text>
         </view>
         <text class="link-label">联系开发者</text>
-		<text class="link-value">亿槑</text>
+        <text class="link-value">亿槑</text>
         <text class="link-arrow">›</text>
       </view>
     </view>
@@ -179,7 +179,7 @@ function openContactLink() {
 function showChangelog() {
   uni.showModal({
     title: ' 更新日志',
-    content: 'v1.0.0\n• 新增：自动识别短信中的快递取件码\n• 新增：批量确认取件\n• 新增：超时智能提醒「24小时」\n• 新增：截图/图片 OCR 识别\n• 新增：权限自检功能（短信/通知/存储）\n• 优化：驿站与快递名智能区分\n\n感谢您的使用！',
+    content: 'v1.0.0\n• 新增：自动识别短信中的快递取件码\n• 新增：批量确认取件\n• 新增：超时智能提醒「24小时」\n• 新增：截图/图片 OCR 识别「测试」\n• 新增：权限自检功能（短信/通知/存储）\n• 优化：驿站与快递名智能区分\n\n感谢您的使用！',
     showCancel: false,
     confirmText: '好的'
   })

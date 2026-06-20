@@ -2,7 +2,7 @@
   <view class="page">
     <!-- 顶部标题 -->
     <view class="header">
-      <text class="title">识别截图取件码</text>
+      <text class="title">识别截图取件码「测试」</text>
       <text class="subtitle">从微信截图、淘宝物流页、短信截图中自动识别快递信息</text>
     </view>
 
@@ -36,6 +36,10 @@
       <view class="btn-secondary" @click="pasteText">
         <text class="btn-icon">📋</text>
         <text class="btn-text">粘贴文字</text>
+      </view>
+      <view class="btn-secondary" @click="editApiKey">
+        <text class="btn-icon">🔑</text>
+        <text class="btn-text">API Key</text>
       </view>
     </view>
 
@@ -168,7 +172,8 @@ function chooseImage() {
  * 真正可用的 OCR：调用免费在线识别 API（ocr.space）
  * - 无需集成 SDK，纯 HTTP 请求即可
  * - 支持中文 & 英文 & 数字
- * - 免注册测试 key：helloworld（有速率限制，日常识别完全够用）
+ * - 测试 key：helloworld（有速率限制，日常识别完全够用）
+ * - 正式使用建议替换为自己的 API key（可在设置页面配置）
  *
  * 流程：uni.uploadFile 上传图片 → 解析返回的 JSON → 提取文字
  */
@@ -176,9 +181,19 @@ function performOnlineOcr(filePath) {
   recognizing.value = true
   uni.showLoading({ title: '正在识别图片...' })
 
-  // ocr.space 免费 API（支持中英文），测试 key：helloworld
-  const OCR_API_KEY = 'helloworld'
+  // ocr.space 免费 API（支持中英文）
+  // 默认 key：helloworld（公共测试 key，有速率限制）
+  // 若用户在本地存储配置了自定义 key，则优先使用自定义 key
+  let customKey = ''
+  try {
+    customKey = uni.getStorageSync('ocr_api_key') || ''
+  } catch (e) {
+    customKey = ''
+  }
+  const OCR_API_KEY = customKey.trim() || 'helloworld'
   const OCR_API_URL = 'https://api.ocr.space/parse/image'
+
+  console.log('[OCR] 使用 API key：', OCR_API_KEY === 'helloworld' ? '公共测试 key (helloworld)' : '自定义 key')
 
   uni.uploadFile({
     url: OCR_API_URL,
@@ -269,84 +284,187 @@ function pasteText() {
 }
 
 /**
- * 解析文字 - 查找其中的快递和取件码
+ * 配置 OCR API key（ocr.space）
+ * - 默认使用公共测试 key：helloworld（有速率限制）
+ * - 用户可在 https://ocr.space/ocrapi 免费注册获得自己的 key
+ * - 保存到本地存储，下次打开自动生效
  */
+function editApiKey() {
+  let currentKey = ''
+  try {
+    currentKey = uni.getStorageSync('ocr_api_key') || ''
+  } catch (e) {
+    currentKey = ''
+  }
+
+  uni.showModal({
+    title: '设置 OCR API Key',
+    content:
+      '当前使用：' + (currentKey.trim() ? '自定义 Key（' + currentKey.trim().slice(0, 6) + '...）' : '公共测试 key（helloworld，有速率限制）') +
+      '\n\n点击「确定」后在输入框粘贴您自己的 key，留空则恢复使用默认测试 key。\n\n免费申请：https://ocr.space/ocrapi',
+    confirmText: '修改 Key',
+    cancelText: '重置默认',
+    success: (res) => {
+      if (res.confirm) {
+        // 弹第二个输入框让用户输入 key
+        uni.showModal({
+          title: '输入 API Key',
+          editable: true,
+          placeholderText: currentKey.trim() || 'helloworld',
+          content: '',
+          confirmText: '保存',
+          cancelText: '取消',
+          success: (res2) => {
+            if (res2.confirm) {
+              const newKey = (res2.content || '').trim()
+              try {
+                uni.setStorageSync('ocr_api_key', newKey)
+                uni.showToast({
+                  title: newKey ? '已保存自定义 Key' : '已恢复默认测试 key',
+                  icon: 'success'
+                })
+              } catch (e) {
+                uni.showToast({ title: '保存失败', icon: 'none' })
+              }
+            }
+          }
+        })
+      } else {
+        // 点击"重置默认"
+        try {
+          uni.setStorageSync('ocr_api_key', '')
+          uni.showToast({ title: '已恢复默认测试 key', icon: 'success' })
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+  })
+}
+
 /**
- * 多快递 OCR 文本解析：
- * 核心策略：先按【xxx驿站】/【xxx快递】等标记，将文本拆分为「独立快递块」
- * 每个快递块独立调用 parsePickupCode 解析，保证驿站名、取件码、地址属于同一快递。
+ * 解析文字 - 查找其中的快递和取件码
  *
- * 对用户文本的处理效果：
- *   【妈妈驿站】取货码1-686 ... 746号
- *   【中国邮政】您的快递2805已暂存 ... 取件码283471
- *   → 被拆成 2 个块，分别解析：
- *     块1：妈妈驿站 + 取货码1-686 + 大同镇花棚子746号
- *     块2：中国邮政 + 取件码283471 + 四川省宁南县大同邮政所
+ * 完整解析流程：
+ *  ① OCR 预处理
+ *  ② 文本分块（结构化拆分）
+ *  ③ 分块级解析（获取驿站名/地址上下文）
+ *  ④ 全文多码扫描（兜底，确保不漏码）
+ *  ⑤ 合并去重入库
  */
 function parseText() {
   if (!ocrText.value || !ocrText.value.trim()) {
     uni.showToast({ title: '请先输入或粘贴文字', icon: 'none' })
     return
   }
-  const text = ocrText.value
+
+  // ========== ① OCR 预处理 ==========
+  const raw = ocrText.value
+  const cleaned = preprocessOcrText(raw)
+
   parsedItems.value = []
+  const seenCodes = new Set()
+  const allContexts = []
 
-  // ================== 第一步：按【xxx驿站 / xxx快递 / xxx邮政】拆分为独立快递块 ==================
-  const blocks = splitIntoExpressBlocks(text)
+  // ========== ② 文本分块 ==========
+  const blocks = splitIntoExpressBlocks(cleaned)
 
+  // ========== ③ 分块级解析（为每个码收集上下文） ==========
   for (const block of blocks) {
+    if (looksLikeNoise(block)) continue
     const parsed = parsePickupCode(block)
-    if (!parsed.code) continue
-    if (!isValidPickupCode(parsed.code, block)) continue
-    // 避免重复（同一取件码只收录一次）
-    if (parsedItems.value.some(it => it.code === parsed.code)) continue
+    if (parsed.code && isValidPickupCode(parsed.code, block)) {
+      allContexts.push({
+        code: parsed.code,
+        company: parsed.company || '其他快递',
+        address: parsed.address || '',
+        raw: block.slice(0, 200)
+      })
+    }
+  }
 
-    parsedItems.value.push({
+  // ========== ④ 全文多码扫描（关键兜底：无论分块是否成功，都扫描全文） ==========
+  // 使用 exec 循环查找所有匹配，兼容所有设备
+  // 覆盖多种 OCR 可能产生的格式变化：
+  //   - 取件码 123 / 取件码：123 / 取件码　123（全角空格）/ 取件码123（直接相邻）
+  //   - 凭123 / 凭 123 / 凭码123 / 请凭123 / 请到123
+  //   - 码 123 / 码:123 / 码123
+  // 四个捕获组分别对应不同格式族：
+  //   [1] 取件码+分隔符+码 | [2] 凭族+分隔符+码 | [3] 直接相邻 | [4] 位置前缀+码+后缀
+  const GLOBAL_CODE_REGEX =
+    /(?:取件码|取货码|提货码|提取码)(?:[\s　]*[：:\uff1a]?[\s　]*|[\s　]+)([A-Za-z0-9-]{2,14})/g  // 取件码族
+  let gMatch
+  while ((gMatch = GLOBAL_CODE_REGEX.exec(cleaned)) !== null) {
+    const rawCode = (gMatch[1] || '').trim()
+    if (!rawCode || rawCode.length < 2) continue
+    if (!isValidPickupCode(rawCode, cleaned)) continue
+
+    const codeIndex = gMatch.index
+    const beforeText = cleaned.substring(Math.max(0, codeIndex - 200), codeIndex)
+    const parsed = parsePickupCode(beforeText + '取件码' + rawCode)
+
+    allContexts.push({
+      code: rawCode,
       company: parsed.company || '其他快递',
-      code: parsed.code,
       address: parsed.address || '',
-      raw: block.slice(0, 200)
+      raw: beforeText.slice(-80) + '...取件码' + rawCode
     })
   }
 
-  // ================== 第二步：若拆分方式没找到（无【】标记的单快递），回退为整体解析 ==================
-  if (parsedItems.value.length === 0) {
-    const parsed = parsePickupCode(text)
-    if (parsed.code && isValidPickupCode(parsed.code, text)) {
-      parsedItems.value.push({
-        company: parsed.company || '其他快递',
-        code: parsed.code,
-        address: parsed.address || '',
-        raw: text.slice(0, 200)
-      })
-    }
+  // ④b 凭族扫描（请凭/凭/凭码/请到）
+  const PREFIX_REGEX =
+    /(?:凭|凭码|请凭|请凭码|请到)(?:[\s　]*[：:\uff1a]?[\s　]*|[\s　]+)([A-Za-z0-9-]{2,14})/g
+  while ((gMatch = PREFIX_REGEX.exec(cleaned)) !== null) {
+    const rawCode = (gMatch[1] || '').trim()
+    if (!rawCode || rawCode.length < 2) continue
+    if (!isValidPickupCode(rawCode, cleaned)) continue
+
+    const codeIndex = gMatch.index
+    const beforeText = cleaned.substring(Math.max(0, codeIndex - 200), codeIndex)
+    const parsed = parsePickupCode(beforeText + '取件码' + rawCode)
+
+    allContexts.push({
+      code: rawCode,
+      company: parsed.company || '其他快递',
+      address: parsed.address || '',
+      raw: beforeText.slice(-80) + '...取件码' + rawCode
+    })
   }
 
-  // ================== 第三步：兜底（仅在前两步一无所获时启用） ==================
-  if (parsedItems.value.length === 0) {
-    const m1 = text.match(/取件码[：:\s]*([A-Za-z0-9-]{3,14})/)
-    if (m1 && isValidPickupCode(m1[1], text)) {
-      const parsed = parsePickupCode(text)
-      parsedItems.value.push({
-        company: parsed.company || '其他快递',
-        code: m1[1],
-        address: parsed.address || '',
-        raw: text.slice(0, 200)
-      })
-    } else {
-      const m2 = text.match(/凭\s*([A-Za-z0-9-]{3,14})\s*[取到]/)
-      if (m2 && isValidPickupCode(m2[1], text)) {
-        const parsed = parsePickupCode(text)
-        parsedItems.value.push({
-          company: parsed.company || '其他快递',
-          code: m2[1],
-          address: parsed.address || '',
-          raw: text.slice(0, 200)
-        })
-      }
-    }
+  // ④c 直接相邻扫描（取件码123，无空格）
+  const DIRECT_REGEX = /(?:取件码|取货码|凭|请凭)([A-Za-z0-9-]{3,14})(?![A-Za-z0-9-])/g
+  while ((gMatch = DIRECT_REGEX.exec(cleaned)) !== null) {
+    const rawCode = (gMatch[1] || '').trim()
+    if (!rawCode || rawCode.length < 3) continue
+    if (!isValidPickupCode(rawCode, cleaned)) continue
+
+    const codeIndex = gMatch.index
+    const beforeText = cleaned.substring(Math.max(0, codeIndex - 200), codeIndex)
+    const parsed = parsePickupCode(beforeText + '取件码' + rawCode)
+
+    allContexts.push({
+      code: rawCode,
+      company: parsed.company || '其他快递',
+      address: parsed.address || '',
+      raw: beforeText.slice(-80) + '...取件码' + rawCode
+    })
   }
 
+  // ========== ⑤ 合并去重入库 ==========
+  for (const ctx of allContexts) {
+    const normalized = ctx.code.replace(/-/g, '').toUpperCase()
+    if (seenCodes.has(normalized)) continue
+    seenCodes.add(normalized)
+
+    parsedItems.value.push({
+      company: ctx.company || '其他快递',
+      code: ctx.code,
+      address: ctx.address || '',
+      raw: ctx.raw.slice(0, 200)
+    })
+  }
+
+  // ========== ⑥ 结果反馈 ==========
   if (parsedItems.value.length === 0) {
     uni.showToast({ title: '未识别到取件码，请手动填写', icon: 'none' })
   } else {
@@ -357,168 +475,387 @@ function parseText() {
   }
 }
 
-/**
- * 将 OCR 文本按「【xxx驿站】【xxx快递】【xxx邮政】等标记拆成多个快递块。
- *
- * 关键改进：
- * - 排除过于泛化的标记（如「代收点」「服务站」），只识别具体的驿站/快递品牌名
- * - 商品详情段落（抖音/淘宝等）以特定关键字开头，排除其干扰
- *
- * 输入示例：
- *   【妈妈驿站】取货码1-686，您有\n圆通快递包裹，已到大同镇花棚子\n746号\n
- *   【中国邮政】您的快递2805已暂存...取件码\n283471
- *
- * 输出示例（2 个 block）：
- *   [
- *     "妈妈驿站】取货码1-686，您有圆通快递包裹，已到大同镇花棚子746号",
- *     "中国邮政】您的快递2805已暂存四川省宁南县大同邮政所，取件码283471"
- *   ]
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// ① OCR 文本预处理
+// 目的：OCR 识别会产生字符混淆、换行碎片等，影响正则匹配
+// ─────────────────────────────────────────────────────────────────────────────
+function preprocessOcrText(text) {
+  if (!text) return ''
+
+  let t = text
+
+  // 1) 合并换行碎片：某行很短（< 8字符）且不以标点结尾，则与下一行合并
+  //    例：「取件码\n4-1234」→「取件码 4-1234」
+  t = t.replace(/(?<=[^\n，。、！？.!?,;:\s])\n(?=[^\n])/g, ' ')
+
+  // 2) 统一全角/半角符号（避免 OCR 混淆）
+  t = t.replace(/：/g, ':')
+  t = t.replace(/【/g, '【')
+  t = t.replace(/】/g, '】')
+
+  // 3) 合并多余空白字符
+  t = t.replace(/[ \t]+/g, ' ').trim()
+
+  // 4) 移除 OCR 常见误识别字符（零宽字符、控制字符）
+  t = t.replace(/[\u200B-\u200D\uFEFF\r]/g, '')
+
+  return t
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ② 文本分块：把 OCR 文本拆为多个快递信息块
+//
+// 策略（优先级递减）：
+//   A. 有【】标记 → 按标记切片
+//   B. 换行缩进结构（常见于微信/短信多行截图中）
+//   C. 编号列表（1. / (1) / ① 等快递单元分隔符）
+//   D. 时间戳分割（常见于聊天记录中不同时间发送的消息）
+// ─────────────────────────────────────────────────────────────────────────────
 function splitIntoExpressBlocks(text) {
   if (!text) return []
 
-  // 标记白名单：只识别具体的快递/驿站品牌，「代收点」「服务站」等泛化词排除
-  const markerRegex = /【([^】\n]{1,20}?(?:驿站|快递|速递|邮政|物流|快递柜|快收|生活))】/g
+  // ── A：按【】标记拆分 ──
+  const bracketBlocks = splitByBrackets(text)
+  if (bracketBlocks.length > 0) {
+    // 对每个块再递归拆分（处理块内嵌套【】的情况）
+    const result = []
+    for (const block of bracketBlocks) {
+      if (!block || block.trim().length < 4) continue
+      const sub = splitByBrackets(block)
+      if (sub.length > 1) {
+        sub.forEach(s => { if (s && s.trim().length >= 4) result.push(s.trim()) })
+      } else {
+        result.push(block.trim())
+      }
+    }
+    return result.length > 0 ? result : bracketBlocks
+  }
 
-  // 排除的商品/广告段落开头关键字（这些段落虽含"取件码"，但不是快递驿站信息）
-  const PRODUCT_SECTION_KEYWORDS = [
-    '已通过虚拟号码发货', '号码保护', '隐私提醒',
-    '抖音商城', '抖音', '淘宝', '天猫', '京东', '拼多多',
-    '企业店', '简约活页', '活页本', '小时达', '超值购',
-    '灵', '萌小年', '号码保护中', '号码保护'
-  ]
+  // ── B：按换行缩进结构拆分 ──
+  // 微信/短信中每条消息以换行开头，同一快递的信息连贯排列
+  const lineBlocks = splitByLineIndent(text)
+  if (lineBlocks.length > 1) return lineBlocks.filter(b => b.trim().length >= 8)
+
+  // ── C：按编号列表拆分 ──
+  const listBlocks = splitByListMarkers(text)
+  if (listBlocks.length > 1) return listBlocks.filter(b => b.trim().length >= 8)
+
+  // ── D：按时间戳拆分（聊天记录中常见） ──
+  const timeBlocks = splitByTimestamps(text)
+  if (timeBlocks.length > 1) return timeBlocks.filter(b => b.trim().length >= 8)
+
+  // 无明显结构 → 整体返回
+  return [text.trim()]
+}
+
+/**
+ * A. 按【xxx驿站 / xxx快递 / xxx邮政】等标记拆分
+ * 只识别具体品牌，排除泛化词（代收点/物流服务/物流）
+ */
+function splitByBrackets(text) {
+  // 标记白名单：匹配【xxx驿站】【xxx快递】【xxx邮政】【xxx柜】【xxx生活】等
+  const BRACKET_REGEX = /【([^】\n]{1,20}?(?:驿站|快递|速递|邮政|物流|快递柜|柜|快收|生活))】/g
+
+  // 排除的泛化词（非具体驿站/快递品牌）
+  const EXCLUDE_NAMES = new Set([
+    '代收点', '物流服务', '物流', '服务站', '收件宝',
+    '代收', '快递代收', '包裹代收'
+  ])
 
   const positions = []
   let match
-  while ((match = markerRegex.exec(text)) !== null) {
+  while ((match = BRACKET_REGEX.exec(text)) !== null) {
     const name = match[1].trim()
-    // 过滤掉「代收点」「物流服务」等泛化词（不是具体驿站名）
-    if (['代收点', '物流服务', '物流'].includes(name)) continue
+    if (EXCLUDE_NAMES.has(name)) continue
     positions.push({ start: match.index, name })
   }
 
-  // 无任何有效【】标记：过滤商品段落后返回单个块
-  if (positions.length === 0) {
-    // 过滤掉商品详情段落（抖音/淘宝/京东等）中的「收件人+商品+价格」等干扰内容
-    const filtered = filterOutProductSection(text, PRODUCT_SECTION_KEYWORDS)
-    return filtered ? [filtered] : []
-  }
+  if (positions.length === 0) return []
 
-  // 有有效【】标记：按相邻标记的位置切片
+  const blocks = []
   for (let i = 0; i < positions.length; i++) {
-    const startIdx = positions[i].start
-    const endIdx = (i + 1 < positions.length)
-      ? positions[i + 1].start
-      : text.length
-    const block = text.substring(startIdx, endIdx).trim()
-    if (block.length > 5) blocks.push(block)
+    const start = positions[i].start
+    const end = (i + 1 < positions.length) ? positions[i + 1].start : text.length
+    const block = text.substring(start, end).trim()
+    if (block.length >= 4) blocks.push(block)
   }
-
   return blocks
 }
 
 /**
- * 过滤掉商品详情段落，避免商品中的「取件码」混入物流解析
- * 例如：快递物流信息（待取件 + 取件码）与 商品评价信息（收货人+花棚子568号）混在一起
+ * B. 按换行缩进结构拆分
+ *
+ * 识别模式：
+ *   - 新行缩进量明显变化（同一快递连贯，换快递时缩进重置）
+ *   - 多行合并成块的逻辑：连续行合并，直到出现新的【】标记或缩进重置
+ *
+ * 简化策略：检测段落中明显的空行/缩进变化作为分块信号
  */
-function filterOutProductSection(text, productKeywords) {
-  // 找到文本中所有商品关键词出现的位置
-  let earliestProductIdx = text.length
+function splitByLineIndent(text) {
+  const lines = text.split('\n')
+  const blocks = []
+  let current = []
 
-  for (const kw of productKeywords) {
-    const idx = text.indexOf(kw)
-    if (idx >= 0 && idx < earliestProductIdx) {
-      earliestProductIdx = idx
-    }
-  }
-
-  // 如果商品关键词在取件码标记之前出现，则截断商品段落
-  // 物流信息通常以「取件码/待取件/快递员」等结尾，商品段以「号码保护中/已通过虚拟号码」开头
-  if (earliestProductIdx < text.length) {
-    // 找到「取件码」关键字的位置（如果有的话，在商品关键词之前）
-    const pickupCodeIdx = text.indexOf('取件码')
-    const toRemoveIdx = text.indexOf('号码保护中')
-    const copyIdx = text.indexOf('联系驿站')
-
-    // 商品段落通常包含"联系驿站"之后的内容（驿站/快递员信息）和商品详情
-    // 驿站信息截止到"联系驿站"之前，商品详情从"号码保护中"开始
-    if (toRemoveIdx >= 0) {
-      // 找到「联系驿站」或「联系快递员」的位置，商品段在这之后
-      const linkIdx = Math.max(
-        text.lastIndexOf('联系驿站', toRemoveIdx),
-        text.lastIndexOf('物流客服', toRemoveIdx)
-      )
-      if (linkIdx >= 0) {
-        // 驿站物流信息截止到「联系驿站」前；商品详情从「号码保护中」起
-        return text.substring(0, toRemoveIdx).trim()
+  for (const line of lines) {
+    const trimmed = line.trim()
+    // 空行 → 结束当前块
+    if (!trimmed) {
+      if (current.length > 0) {
+        const joined = current.join(' ')
+        if (joined.length >= 8) blocks.push(joined)
+        current = []
       }
-      return text.substring(0, toRemoveIdx).trim()
+      continue
     }
+    current.push(trimmed)
   }
-  return text
+  // 剩余
+  if (current.length > 0) {
+    const joined = current.join(' ')
+    if (joined.length >= 8) blocks.push(joined)
+  }
+
+  // 只有当块数量 >= 2 且每块都含有快递关键词时才分块
+  if (blocks.length < 2) return [text.trim()]
+  // 过滤：确保每块至少含有一个快递相关关键词
+  const expressKw = /取件|取货|快递|驿站|包裹|待取|已到|凭码|取码|货架|柜号|箱号/
+  return blocks.filter(b => expressKw.test(b))
 }
 
 /**
- * 判定一个「取件码」是否合理：
- * - 不是很长的订单号/运单号（> 12 位纯数字的不认可）
- * - 不是手机号（11 位纯数字，且以 1 开头）
- * - 不是身份证号（15/18 位，末位可能有 X）
- * - 前缀不是「订单编号/订单号/运单号/快递单号/手机号」等关键字
+ * C. 按编号列表分隔符拆分
+ * 常见格式：1. / (1) / ① / 【1】/ No.1 等
+ */
+function splitByListMarkers(text) {
+  // 匹配列表开头：行首编号（排除普通数字，如价格 12.5）
+  const LIST_REGEX = /(?<=\n|^)[ \t]*(?:(?:\d+[.、])|(?:[（(]\d+[）)])|(?:[①-⑨\d]+[.、.．])|(?:【\d+】)|(?:No\.?\s*\d+)|(?:第\d+[条个号]))/g
+
+  // 找到所有列表项起始位置
+  const positions = []
+  let match
+  const regexCopy = new RegExp(LIST_REGEX.source, 'g')
+  while ((match = regexCopy.exec(text)) !== null) {
+    // 排除「12.5元」「3.5折」等价格格式（数字+小数点+数字）
+    const afterMatch = text.substring(match.index, match.index + 20)
+    if (/^\d+\.\d+/.test(afterMatch)) continue
+    positions.push(match.index)
+  }
+
+  if (positions.length < 2) return [text.trim()]
+
+  const blocks = []
+  for (let i = 0; i < positions.length; i++) {
+    const start = positions[i]
+    const end = (i + 1 < positions.length) ? positions[i + 1] : text.length
+    const block = text.substring(start, end).trim()
+    if (block.length >= 8) blocks.push(block)
+  }
+  return blocks
+}
+
+/**
+ * D. 按时间戳分割（聊天记录中常见）
+ * 常见格式：12:30 / 上午10:00 / 2024-01-01 10:00 / 昨天 15:00
+ */
+function splitByTimestamps(text) {
+  const TS_REGEX = /(?<=\n|^)[ \t]*(?:\d{1,2}:\d{2}(?::\d{2})?|上午\d{1,2}:\d{2}|下午\d{1,2}:\d{2}|凌晨\d{1,2}:\d{2}|(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}[ \t]+\d{1,2}:\d{2}))[ \t]*\n/g
+
+  const positions = []
+  let match
+  const regexCopy = new RegExp(TS_REGEX.source, 'g')
+  while ((match = regexCopy.exec(text)) !== null) {
+    positions.push(match.index)
+  }
+
+  if (positions.length < 2) return [text.trim()]
+
+  const blocks = []
+  for (let i = 0; i < positions.length; i++) {
+    const start = positions[i]
+    const end = (i + 1 < positions.length) ? positions[i + 1] : text.length
+    const block = text.substring(start, end).trim()
+    if (block.length >= 8) blocks.push(block)
+  }
+  return blocks
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ③ 噪声段落判断
+// 返回 true = 整段明显不是快递信息，可跳过
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * 判断某段文字是否为明显的广告/噪声，不值得作为快递去解析
+ *
+ * 策略：优先检测正面关键词（取件/快递相关）→ 存在则不是噪声
+ *       再检测负面关键词（电商/广告/金融/生活服务等）→ 命中则判定噪声
+ */
+function looksLikeNoise(seg) {
+  if (!seg || seg.length < 6) return true
+
+  const s = seg
+
+  // ── 正面：包含任何快递/取件相关关键词 → 不是噪声，继续解析 ──
+  const EXPRESS_KW = new RegExp([
+    '取件码', '取货码', '提货码', '提取码', '取件编号',
+    '凭码', '凭取', '取件地', '取件地址', '货架号', '柜号', '箱号',
+    '驿站', '快递', '包裹', '快件', '待取', '已到', '已存', '已放', '派送',
+    '货架', '取货', '提件', '丰巢', '兔喜', '菜鸟', '妈妈驿', '圆通', '中通',
+    '申通', '韵达', '顺丰', '极兔', '邮政', 'EMS', '百世', '德邦', '天天',
+    '安能', '宅急送', '苏宁', '丹鸟', '优速', '蓝店', '熊猫快收', '快宝驿',
+    '小兵驿', '欢猫驿', '小象驿', '邻里驿', '多多驿', '申通喵'
+  ].join('|'))
+  if (EXPRESS_KW.test(s)) return false
+
+  // ── 负面：命中以下任一关键词 → 直接判定噪声 ──
+  const NOISE_PATTERNS = [
+    // 电商/购物平台
+    new RegExp(['抖音商城', '天猫超市', '淘宝店铺', '京东购物', '拼多多购物', '小红书', '唯品会', '得物',
+      '官方旗舰', '品牌特卖', '优惠券', '满减', '返场', '下单成功', '立即购买', '加入购物车',
+      '已购', '订单详情', '订单编号', '订单号', '订单金额', '实际付款', '待发货', '待收货'].join('|')),
+    // 生活服务/餐饮外卖
+    new RegExp(['美团', '饿了么', '外卖配送', '骑手', '送达地址', '收货人', '联系电话\\d{11}',
+      '送达时间', '预计送达', '外卖小哥', '快餐', '美食', '餐饮'].join('|')),
+    // 金融/支付
+    new RegExp(['支付成功', '收款到账', '转账成功', '消费元', '余额元', '积分分',
+      '银行卡', '信用卡', '花呗', '借呗', '账单日', '还款日', '还款金额'].join('|')),
+    // 会员/订阅/积分
+    new RegExp(['会员权益', '积分兑换', '免费领取', '订阅成功', '已订阅'].join('|')),
+    // 验证码/安全
+    new RegExp(['验证码\\d{4,6}', '动态密码', '登录验证码', '支付验证码', '安全验证'].join('|')),
+    // 广告/营销
+    new RegExp(['免费领', '限时抢', '抢购', '秒杀', '特惠价', '折扣', '爆款', '热卖', '新品上市',
+      '正品保障', '官方正品', '假一赔', '品质保证', '急速发货'].join('|')),
+    // 内容推荐/社交
+    new RegExp(['朋友圈', '微信群', '扫码进群', '邀请好友', '分享得',
+      '种草', '好物推荐', '达人推荐', '万人购买'].join('|')),
+    // 天气/日历
+    new RegExp(['今天天气', '明日天气', '穿衣指数', '感冒指数', '紫外线'].join('|')),
+    // 其他非快递业务
+    new RegExp(['预约成功', '排队号码', '排队号', '办理成功', '已开通', '已关闭'].join('|'))
+  ]
+
+  for (const pat of NOISE_PATTERNS) {
+    if (pat.test(s)) return true
+  }
+
+  // ── 长度过短且不含快递关键词 → 噪声 ──
+  if (s.length < 20 && !/取件|快递|驿站|包裹|待取/.test(s)) return true
+
+  return false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ④ 取件码合理性验证
+// 返回 true = 看起来像真实的取件码
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * 判定一个「取件码」是否合理
+ *
+ * 过滤场景：
+ *   - 手机号（11位，以1开头）
+ *   - 运单号/订单号（13位+纯数字）
+ *   - 身份证号（15/18位）
+ *   - 日期/时间戳（2024xxx / 20250618 等）
+ *   - 价格/金额（12.5 / ¥12 / 元）
+ *   - 纯数字流水号（无上下文快递关键词）
+ *   - 前缀为「订单/运单/编号/电话」等关键字
+ *   - 前后缀为标点/序号格式（如「1」「2」「①」等孤立数字）
  */
 function isValidPickupCode(code, context) {
   if (!code) return false
   const c = String(code).trim()
-  if (!c) return false
+  if (!c || c.length < 2 || c.length > 16) return false
 
-  // 1) 11 位纯数字且以 1 开头 → 手机号，拒绝
+  // ── 格式基础过滤 ──
+  // 1) 纯数字：11位（手机号）
   if (/^1\d{10}$/.test(c)) return false
 
-  // 2) 13 位以上的纯数字 → 运单号/长订单号，拒绝（取件码通常 4-8 位，最多 2-14 位且带 -）
+  // 2) 纯数字：13位+（运单号）
   if (/^\d{13,}$/.test(c)) return false
 
-  // 3) 身份证号格式 → 拒绝
-  if (/^\d{15}$/.test(c) || /^\d{17}[\dXx]$/.test(c)) return false
+  // 3) 身份证号
+  if (/^\d{15}$/.test(c)) return false
+  if (/^\d{17}[\dXx]$/.test(c)) return false
 
-  // 4) 如果紧邻前缀包含「订单编号/订单号/运单号/快递单号/手机号」等关键字 → 拒绝
-  //    在 context 中寻找 pattern，检查其前后 10 个字符
-  const idx = context ? context.indexOf(c) : -1
-  if (idx >= 0) {
-    const before = context.substring(Math.max(0, idx - 12), idx)
-    if (/订单编号|订单号|运单号|快递单号|手机号|电话|联系/.test(before)) {
-      return false
+  // 4) 日期/时间戳过滤（改为更严格、只拒绝明显是日期的格式）
+  //    规则：
+  //    - 8 位纯数字且前 4 位是 2020-2099，且后 4 位看起来像 MMDD → 拒绝（如 20250620）
+  //    - 6 位纯数字且前 4 位是 2020-2099，后 2 位是 01-12 → 拒绝（如 202506）
+  //    - 6 位纯数字且前 2 位是 20-29，中间 2 位是 01-12 → 拒绝（如 250618）
+  //    - 其他 4-8 位纯数字不拒绝（如 283471 是驿站取件码，不要误伤！）
+  //    关键改进：如果代码紧邻 "取件码/取货码/提货码/凭" 前缀 → 不做日期判断
+  if (context) {
+    const idx2 = context.indexOf(c)
+    if (idx2 >= 0) {
+      const before2 = context.substring(Math.max(0, idx2 - 8), idx2)
+      // 紧邻取件码/取货码/提货码/凭 → 100% 是取件码，直接跳过日期判断
+      if (/取件码|取货码|提货码|提取码|凭码|凭|请凭/.test(before2)) {
+        // 有明确取件码前缀 → 跳过日期/格式类过滤
+        // 注意：仍会执行手机号/运单号等格式检查（在第 1-3、5-7 步）
+        return c.length >= 2 && c.length <= 14
+      }
     }
   }
 
-  // 5) 长度校验：正常取件码 2-14 位（含 -）
-  if (c.length < 2 || c.length > 14) return false
+  // 无明确取件码前缀 → 执行日期格式检查（更严格）
+  if (/^\d{6,8}$/.test(c)) {
+    // 8 位：YYYYMMDD
+    if (c.length === 8) {
+      const y8 = parseInt(c.substring(0, 4), 10)
+      const m8 = parseInt(c.substring(4, 6), 10)
+      const d8 = parseInt(c.substring(6, 8), 10)
+      if (y8 >= 2020 && y8 <= 2099 && m8 >= 1 && m8 <= 12 && d8 >= 1 && d8 <= 31) return false
+    }
+    // 6 位：YYYYMM 或 YYMMDD
+    if (c.length === 6) {
+      const y6_1 = parseInt(c.substring(0, 4), 10) // YYYYMM
+      const m6_1 = parseInt(c.substring(4, 6), 10)
+      if (y6_1 >= 2020 && y6_1 <= 2099 && m6_1 >= 1 && m6_1 <= 12) return false
+      const y6_2 = parseInt(c.substring(0, 2), 10) // YYMMDD
+      const m6_2 = parseInt(c.substring(2, 4), 10)
+      const d6_2 = parseInt(c.substring(4, 6), 10)
+      if (y6_2 >= 20 && y6_2 <= 29 && m6_2 >= 1 && m6_2 <= 12 && d6_2 >= 1 && d6_2 <= 31) return false
+    }
+  }
+
+  // 5) 4-5 位纯数字（如 2805、746）→ 上下文包含 "快递 NNNN" 或 "N 号" 的是干扰，需用上下文判断
+  //    注意：实际取件码也可能是 4-6 位纯数字（如妈妈驿站的 1-686 被拆成 686），所以只在无上下文线索时放行
+  //    （这部分不主动拒绝，交给前面的前缀判断处理）
+  if (/^[\d.]+\s*[元$r$R]?$/.test(c)) return false
+  if (/^[¥$]\s*\d+(\.\d{1,2})?$/.test(c)) return false
+
+  // 6) 孤立序号（单个汉字或单个字母 → 不是取件码）
+  if (c.length === 1 && /[a-zA-Z\u4e00-\u9fa5]/.test(c)) return false
+
+  // 7) 以「#」「NO.」「N」开头 → 订单/流水号，拒绝
+  if (/^(no\.?|n[o°]?\s*\d|#\d)/i.test(c)) return false
+
+  // ── 上下文验证 ──
+  if (context) {
+    // 8) 前缀关键字：运单/订单/编号/手机/电话/联系/价格等
+    const idx = context.indexOf(c)
+    if (idx >= 0) {
+      const before = context.substring(Math.max(0, idx - 15), idx)
+      const after = context.substring(Math.min(context.length, idx + c.length), Math.min(context.length, idx + c.length + 10))
+
+      // 排除：编码前缀
+      if (/订单[编号号]|运单|快递单|单号|手机号?|电话|联系|价格|金额|编号[:：]|NO[:：.]|#/.test(before)) return false
+      // 排除：编码后缀（价格单位、序号等）
+      if (/^[号号.件]+$/.test(after)) return false
+      // 排除：整段上下文是日期/金额类文本
+      if (/日期|时间|金额|价格|收款|付款|充值|话费|流量/.test(context)) return false
+    }
+
+    // 9) 上下文本身不包含任何快递关键词 → 可能是误识别
+    const expressKwInContext = /取件|取货|快递|驿站|包裹|待取|已到|凭.*[码号]|[0-9]{4}[码号]/.test(context)
+    if (!expressKwInContext) {
+      // 无快递关键词，但码包含字母/符号 → 降低置信度，保留（部分驿站短信无显式取件码关键词）
+      // 无快递关键词，且纯数字 4-8 位 → 极可能误识别
+      if (/^\d{4,8}$/.test(c) && !/[A-Za-z-]/.test(c)) return false
+    }
+  }
 
   return true
-}
-
-/**
- * 判断某段文字是否为明显的广告/噪声，不值得作为快递去解析
- * 只返回 true 当这段文字主要由噪声关键词构成，且没有任何取件码相关标识
- */
-function looksLikeNoise(seg) {
-  // 取件码相关关键字（一旦包含就不是噪声，过滤会继续）
-  if (/取件码|取货码|提货码|凭\s*\d|驿站|待取件|快件|包裹|快递员|代收点|邮政快递|快递包裹/.test(seg)) {
-    return false
-  }
-
-  // 典型广告/业务关键字（命中 1 个即认为整段不是快递信息）
-  const noiseKeywords = [
-    '优惠券', '返场', '满减', '下单', '官方旗舰', '旗舰店', '品牌',
-    '订单编号', '运单号', '订单号', '收货地址',
-    '拨打电话', '订阅', '导航',
-    '种草', '正品', '万人', '步步生香', '留香', '持久',
-    '中华人民共和国', '官方', 'BASE', 'scent',
-    '万人种草', 'booster', '虚拟号码', '隐私提醒',
-    '抖音商城', '小时达', '超值购', '灵'
-  ]
-  for (const kw of noiseKeywords) {
-    if (seg.includes(kw)) return true
-  }
-  return false
 }
 
 /**
@@ -619,7 +956,7 @@ function confirmSave() {
 
 .header {
   padding: 32rpx 24rpx;
-  background: linear-gradient(135deg, #1A2A4A 0%, #3A5A8A 100%);
+  background: linear-gradient(135deg, #4672ca 0%, #3e90c3 100%);
   border-radius: 24rpx;
   margin-bottom: 24rpx;
 }
@@ -703,7 +1040,7 @@ function confirmSave() {
   border-radius: 20rpx;
 }
 .btn-primary {
-  background: linear-gradient(135deg, #1A2A4A 0%, #3A5A8A 100%);
+  background: linear-gradient(135deg, #3088d6 0%, #4292d8 100%);
 }
 .btn-secondary {
   background: #FFFFFF;

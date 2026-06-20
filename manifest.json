@@ -10,8 +10,8 @@
         "nvueStyleCompiler" : "uni-app",
         "compilerVersion" : 3,
         "splashscreen" : {
-            "alwaysShowBeforeRender" : true,
-            "waiting" : true,
+            "alwaysShowBeforeRender" : false,
+            "waiting" : false,
             "autoclose" : true,
             "delay" : 0
         },
@@ -65,6 +65,14 @@
                         "spotlight@3x" : "unpackage/res/icons/120x120.png"
                     }
                 }
+            },
+            "splashscreen" : {
+                "androidStyle" : "default",
+                "android" : {
+                    "hdpi" : "D:/Downloads/splash-480x762.png",
+                    "xhdpi" : "D:/Downloads/splash-720x1242.png",
+                    "xxhdpi" : "D:/Downloads/splash-1080x1882.png"
+                }
             }
         }
     },
@@ -93,5 +101,8 @@
         "uniStatistics" : {
             "enable" : false
         }
+    },
+    "quickapp-webview" : {
+        "icon" : "static/logo.png"
     }
 }

@@ -4,6 +4,7 @@
  */
 
 import { useExpressStore } from '@/stores/express'
+import { sendNotification, getNotificationPrefs } from '@/utils/widgetBridge'
 
 /**
  * 快递公司关键词表
@@ -240,9 +241,9 @@ const FALLBACK_SIX_DIGIT = /(?:^|[^\d])(\d{6})(?=[^\d]|$)/
  * 扩充至常见的各类取件通知关键词
  */
 const SMS_CONTEXT_KEYWORDS = [
-  // 核心取件相关
+  // 核心取件相关（注意：不含「通知」——避免被运营商营销短信误触发）
   '取件', '快递', '包裹', '驿站', '丰巢', '菜鸟',
-  '取货', '提货', '派件', '入库', '到货', '通知',
+  '取货', '提货', '派件', '入库', '到货',
   '货架', '柜子', '取货码', '取件码', '自提', '提件',
   // 地点相关
   '收发室', '物管', '物业', '前台', '门卫',
@@ -267,39 +268,95 @@ const SMS_CONTEXT_KEYWORDS = [
 
 /**
  * 地址提取正则（只提取完整地址，避免与取件码混淆）
- * 注意：取件码在 parsePickupCode 中会先被提取，地址只是辅助信息
+ * 优先级从高到低排列（具体格式优先，通用格式兜底）
  */
 const ADDRESS_PATTERNS = [
-  // 明确标注地址
-  /取件地址[：:：]([^\n，。,\.；;]{3,60})/,
-  /收件地址[：:：]([^\n，。,\.；;]{3,60})/,
-  /地址[：:：]([^\n，。,\.；;]{3,60})/,
-  // 已到/到达格式
-  /已到(.+?)[，,]请凭/,           // 【欢猫驿站】已到xxx，请凭xxx
-  /已到达(.+?)[，,]/,             // 【兔喜生活】您有包裹已到达xxx
-  /到达(.+?)[，,]/,               // 到达xxx
-  // 存放格式
-  /已存放(.+?)[，,]/,             // 【申通快递】已存放xxx
-  /存放(.+?)[，,]取件码/,          // 存放xxx，取件码
-  /存放(.+?)[，,]/,                // 存放xxx
-  // 暂存格式（邮政/驿站常见）
-  /已暂存(.+?)[，,]/,             // 【中国邮政】您的快递已暂存xxx
-  /暂存(.+?)[，,]/,                // 暂存xxx，取件码
-  // 前往/到格式
-  /前往(.+?)[，,]/,               // 【快宝驿站】前往xxx
-  /到(.+?)取/,                    // 凭xxx到xxx取
-  /到(.+?)[，,]/,                 // 到xxx
-  // 由/保管格式
-  /由(.+?)暂时保管/,              // 【邻里驿站】已由xxx暂时保管
+  // ============================================================
+  // 高优先级：明确标注「取件地址」/ 「取件位置」
+  // ============================================================
+  /取件地址[：:\s]([^\n，。,\.；;]{3,80})/,
+  /取件位置[：:\s]([^\n，。,\.；;]{3,80})/,
+  /取件点[：:\s]([^\n，。,\.；;]{3,80})/,
+  /收件地址[：:\s]([^\n，。,\.；;]{3,80})/,
+
+  // ============================================================
+  // 中优先级：驿站式格式「在xxx」「存放xxx」「已到xxx」
+  // ============================================================
+  // 【驿站名】已到xxx，请凭xxx
+  /已到(.+?)[\s，,]请凭/,
+  // 【驿站名】已到达xxx
+  /已到达(.+?)[\s，,]/,
+  // 【驿站名】已存放xxx
+  /已存放(.+?)[\s，,]/,
+  // 存放xxx，取件码
+  /存放(.+?)[\s，,]取件码/,
+  /存放(.+?)[\s，,]/,
+  // 【驿站名】已暂存xxx
+  /已暂存(.+?)[\s，,]/,
+  // 暂存xxx，取件码
+  /暂存(.+?)[\s，,]取件码/,
+  /暂存(.+?)[\s，,]/,
+  // 在xxx取件（码）
+  /在(.+?)[\s，,]取件/,
+  /在(.+?)[\s，,]取货/,
+  // 放置在xxx
+  /放置在(.+?)[\s，,]/,
+
+  // ============================================================
+  // 通用格式：「到xxx」「前往xxx」「请到xxx」「由xxx保管」
+  // ============================================================
+  // 请到xxx取件（最常见格式之一）
+  /请到(.+?)[\s，,]取件/,
+  /请到(.+?)[\s，,]/,
+  // 前往xxx（驿站短信常见）
+  /前往(.+?)[\s，,]/,
+  // 凭xxx到xxx取
+  /到(.+?)[\s，,]取件/,
+  /到(.+?)[\s，,]取/,
+  // 到xxx（丰巢柜等常见）
+  /到(.+?)[\s，,]/,
+  // 由xxx保管/由xxx代收
   /由(.+?)保管/,
-  // 在/放置格式
-  /在(.+?)取件码/,                // 在xxx取件码
-  /放置在(.+?)[，,]/,             // 放置在xxx
-  // 驿站相关
-  /驿站(.+?)[，,]/,               // xxx驿站xxx
-  /菜鸟驿站(.+?)[，,]/,           // 菜鸟驿站xxx
-  /妈妈驿站(.+?)[，,]/            // 妈妈驿站xxx
+  /由(.+?)代收/,
+  /由(.+?)暂存/,
+
+  // ============================================================
+  // 兜底：「地址：xxx」格式（最通用）
+  // ============================================================
+  /地址[：:\s]([^\n，。,\.；;]{3,80})/,
+
+  // ============================================================
+  // 驿站品牌后缀（驿站式地址最后的兜底）
+  // ============================================================
+  /驿站(.+?)[\s，,]/,
+  /菜鸟驿站(.+?)[\s，,]/,
+  /妈妈驿站(.+?)[\s，,]/,
+  /兔喜生活(.+?)[\s，,]/,
+  /丰巢柜(.+?)[\s，,]/,
+  /丰巢(.+?)[\s，,]/
 ]
+
+/**
+ * 清洗提取出的地址字符串
+ * - 移除末尾的标点、括号内容
+ * - 去掉包含"取件码/请凭"等快递指令的残余
+ * - 限制最大长度
+ */
+function _cleanAddress(raw) {
+  if (!raw || typeof raw !== 'string') return ''
+  let addr = raw.trim()
+  // 移除末尾的取件码/请凭等指令残留
+  addr = addr.replace(/[\s,，,]*请凭.*$/, '')
+  addr = addr.replace(/[\s,，,]*取件码.*$/, '')
+  addr = addr.replace(/[\s,，,]*取件.*$/, '')
+  addr = addr.replace(/[\s,，,]*凭码.*$/, '')
+  addr = addr.replace(/[\s,，,]*货架.*$/, '')
+  // 移除末尾标点
+  addr = addr.replace(/[，,。.、;；:：\s]+$/, '')
+  // 限制长度（太长通常是误提取的段落）
+  if (addr.length > 80) addr = addr.slice(0, 80)
+  return addr.trim()
+}
 
 /**
  * 扫描时间窗口：30 天（扩大范围）
@@ -317,6 +374,27 @@ const SMS_TIME_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
  */
 export function parsePickupCode(body) {
   if (!body || typeof body !== 'string') {
+    return { company: '其他快递', code: null, address: '', emoji: '' }
+  }
+
+  // 0.0 前置黑名单检查：运营商营销/话费/验证码类短信直接返回空
+  // （与 isExpressSms 中的黑名单保持一致，双重保险）
+  const PRE_BLACKLIST = [
+    '订购提醒', '成功订购', '已订购', '已成功订购', '订购成功',
+    '流量日包', '流量包', '话费', '话费余额', '话费充值',
+    '充值成功', '已充值', '已续费', '续费成功',
+    '资费', '套餐', '流量不可结转', '流量不可共享', '流量不可转赠',
+    '剩余流量', '国内通用流量', '流量分钟',
+    '10086', '10010', '10000', '10011',
+    '中国移动', '中国联通', '中国电信', '中国广电',
+    '心级服务', '让爱连接',
+    '银行', '信用卡', '还款', '转账成功', '消费提醒', '账单',
+    '验证码', '您的验证码', '验证码为',
+    '退订', '回T退', '回复TD', '回T', '请勿回复',
+    '积分兑换', '抽奖', '中奖', '获奖'
+  ]
+  const hasHardBlock = PRE_BLACKLIST.some(k => body.includes(k))
+  if (hasHardBlock) {
     return { company: '其他快递', code: null, address: '', emoji: '' }
   }
 
@@ -392,11 +470,12 @@ export function parsePickupCode(body) {
   }
 
   // 4. 提取地址（后文优先，前文兜底）
+  // 优先在后文（取件码之后的文字）查找，因为地址通常在码之后
   let address = ''
   for (const reg of ADDRESS_PATTERNS) {
     const m = afterCode.match(reg)
     if (m && m[1]) {
-      address = m[1].replace(/\s+/g, ' ').trim().slice(0, 80)
+      address = _cleanAddress(m[1])
       break
     }
   }
@@ -405,7 +484,7 @@ export function parsePickupCode(body) {
     for (const reg of ADDRESS_PATTERNS) {
       const m = beforeCode.match(reg)
       if (m && m[1]) {
-        address = m[1].replace(/\s+/g, ' ').trim().slice(0, 80)
+        address = _cleanAddress(m[1])
         break
       }
     }
@@ -459,32 +538,45 @@ function findCompanyInText(text, filterAddress) {
 function findStationAndCourier(text, filterAddress = false) {
   if (!text) return null
 
-  // 地址关键词列表（用于过滤地址文字中的假公司名）
+  // 地址关键词（仅保留通用的地址结构词，不硬编码具体地名）
+  // 说明：之前版本硬编码了"花棚子/白鹤滩/宁南/大同"等具体地名，
+  //       会导致其他地区用户的地址被误过滤/漏识别，因此这里只保留：
+  //       - 地址通用词（路/街/巷/号/村/镇 等）
+  //       - 方向/位置词（对面/旁边/前往 等）
+  //       - 正则用于识别"X路Y号"等典型地址结构
   const ADDRESS_KEYWORDS = [
-    '路', '街', '巷', '号', '弄', '栋', '幢', '楼', '单元', '室',
+    '路', '街', '巷', '弄', '栋', '幢', '楼', '单元', '室',
     '村', '镇', '乡', '县', '区', '市', '省',
     '对面', '旁边', '下行', '上行', '前行', '进来', '进去', '往前走',
-    '花棚子', '白鹤滩', '南丝路', '宁南', '大同'
+    '花园', '广场', '公寓', '小区', '大厦', '商业', '步行街',
+    '大道', '大街', '胡同', '里', '坊', '园', '苑', '阁',
+    '快递柜', '暂存'
   ]
 
   let station = null
   let courier = null
+
+  // 判断一段前缀是否为典型地址片段（统一规则，避免两处重复逻辑）
+  function looksLikeAddress(prefix) {
+    if (!prefix) return false
+    // 规则1：包含地址关键词
+    if (ADDRESS_KEYWORDS.some(ak => prefix.includes(ak))) return true
+    // 规则2：形如 "X路Y号" / "XX号" / "X栋" / "X单元"
+    if (/[路街巷弄道]\S{0,8}[号栋楼室]$/.test(prefix)) return true
+    if (/\d{1,5}[号栋单元]$/.test(prefix)) return true
+    return false
+  }
 
   // 第一步：在 text 中搜索驿站关键词
   for (const entry of STATION_KEYWORDS) {
     for (const key of entry.keys) {
       if (!text.includes(key)) continue
 
-      // 地址过滤
+      // 地址过滤（仅在 filterAddress=true 时生效，用于「取件码之前的前缀」判断）
       if (filterAddress) {
         const idx = text.indexOf(key)
-        const before = text.substring(Math.max(0, idx - 12), idx)
-        const isAddressFragment = ADDRESS_KEYWORDS.some(ak =>
-          before.includes(ak) ||
-          /[路街巷弄]\S{0,6}[号]$/.test(before) ||
-          /\d+号?\S{0,4}$/.test(before)
-        )
-        if (isAddressFragment) continue
+        const before = text.substring(Math.max(0, idx - 15), idx)
+        if (looksLikeAddress(before)) continue
       }
 
       station = { name: entry.name, emoji: entry.emoji }
@@ -501,13 +593,8 @@ function findStationAndCourier(text, filterAddress = false) {
 
       // 地址过滤（尤其重要，防止"路X号邮政"中的"邮政"被误识别）
       const idx = text.indexOf(key)
-      const before = text.substring(Math.max(0, idx - 12), idx)
-      const isAddressFragment = ADDRESS_KEYWORDS.some(ak =>
-        before.includes(ak) ||
-        /[路街巷弄]\S{0,6}[号]$/.test(before) ||
-        /\d+号?\S{0,4}$/.test(before)
-      )
-      if (isAddressFragment) continue
+      const before = text.substring(Math.max(0, idx - 15), idx)
+      if (looksLikeAddress(before)) continue
 
       courier = { name: entry.name, emoji: entry.emoji }
       break
@@ -516,18 +603,11 @@ function findStationAndCourier(text, filterAddress = false) {
   }
 
   // 第三步：组合返回
-  // 驿站 + 快递公司 → 「驿站（快递公司）」
   if (station && courier) {
     return { name: `${station.name}（${courier.name}）`, emoji: station.emoji }
   }
-  // 仅驿站
-  if (station) {
-    return station
-  }
-  // 仅快递公司
-  if (courier) {
-    return courier
-  }
+  if (station) return station
+  if (courier) return courier
 
   return null
 }
@@ -561,18 +641,58 @@ export function getCompanyEmoji(company) {
 function isExpressSms(body) {
   if (!body) return false
 
-  // 排除关键词（这些"验证码"/非快递短信）
-  const EXCLUDE_KEYWORDS = [
+  // ============================================================
+  // 第一步：黑名单检测——明确排除非快递短信
+  // ============================================================
+
+  // 强黑名单：出现则直接判定为非快递短信（不管其他关键词）
+  const HARD_BLOCK_KEYWORDS = [
+    // 运营商营销/订购/话费/流量
+    '订购提醒', '成功订购', '已订购', '已成功订购', '订购成功',
+    '流量日包', '流量包', '话费', '话费余额', '话费充值',
+    '充值成功', '已充值', '已续费', '续费成功',
+    '资费', '套餐', '流量不可结转', '流量不可共享', '流量不可转赠',
+    '剩余流量', '国内通用流量', '流量分钟',
+    // 运营商专属词（带短号码或运营商名）
+    '10086', '10010', '10000', '10011',
+    '中国移动', '中国联通', '中国电信', '中国广电',
+    '心级服务', '让爱连接',
+    // 银行金融
+    '银行', '信用卡', '还款', '转账成功', '消费提醒', '账单',
+    // 验证码/安全类
     '验证码', '登录验证码', '支付验证码', '交易验证码', '安全验证码',
-    '银行卡号', '信用卡', '账号异常', '账号冻结',
+    '动态验证码', '短信验证码', '您的验证码', '验证码为',
+    // 其他明确非快递
+    '退订', '回T退', '回复TD', '回T', '请勿回复',
     '积分兑换', '抽奖', '中奖', '获奖',
-    '转账成功', '还款提醒', '账单提醒', '消费提醒'
+    '账号异常', '账号冻结', '银行卡号'
   ]
-  if (EXCLUDE_KEYWORDS.some(k => body.includes(k))) {
+
+  // 弱黑名单：若同时出现「弱黑名单词 + 无快递关键词」则排除
+  const SOFT_BLOCK_KEYWORDS = [
+    '温馨提示', '温馨提醒', '感谢您的', '尊敬的客户',
+    '营业厅', '客服热线', '客户服务', '人工服务',
+    '登录中国移动', '登录中国联通', '登录中国电信'
+  ]
+
+  // 1. 检查强黑名单：命中任何一个直接返回 false
+  for (const k of HARD_BLOCK_KEYWORDS) {
+    if (body.includes(k)) {
+      return false
+    }
+  }
+
+  // 2. 检查弱黑名单：命中但没有明确的快递关键词 → 排除
+  const hasSoftBlock = SOFT_BLOCK_KEYWORDS.some(k => body.includes(k))
+  const hasClearExpress = SMS_CONTEXT_KEYWORDS.some(k => body.includes(k))
+  if (hasSoftBlock && !hasClearExpress) {
     return false
   }
 
-  return SMS_CONTEXT_KEYWORDS.some(k => body.includes(k))
+  // ============================================================
+  // 第二步：检查是否有明确的快递上下文关键词
+  // ============================================================
+  return hasClearExpress
 }
 
 /**
@@ -1077,6 +1197,21 @@ export async function checkAndLoadSms(triggerNotify = true) {
         const added = store.addItem(item, triggerNotify)
         if (added) {
           newItems++
+          // 新快递到达 -> 发送通知（系统通知 + 应用内消息中心）
+          if (triggerNotify) {
+            try {
+              sendNotification({
+                title: '📦 新快递到达',
+                content: `${item.company} | 取件码：${item.code}`,
+                company: item.company,
+                code: item.code,
+                type: 'express',
+                smsId: item.smsId || null
+              })
+            } catch (notifyErr) {
+              console.warn('[smsParser] 通知发送异常：', notifyErr)
+            }
+          }
           console.log('[smsParser] ✅ 新增：', parsed.company, parsed.code, '|', body.slice(0, 50))
         } else {
           debugLogs.push({ id, code: parsed.code, reason: '可能被去重或已存在' })
